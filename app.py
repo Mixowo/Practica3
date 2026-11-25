@@ -68,9 +68,12 @@ def generar_orden(api_key):
     modelos_activos = [
         m.id
         for m in client.models.list().data
-        if not any(x in m.id.lower() for x in ["whisper", "guard", "tts", "playai", "embed"])
+        if not any(x in m.id.lower() for x in
+                   ["whisper", "guard", "tts", "playai", "orpheus", "embed", "compound", "safeguard"])
     ]
-    modelo_groq = next((m for m in modelos_activos if "llama" in m.lower()), modelos_activos[0])
+    # Candidatos: primero los llama, luego el resto (se prueban en orden)
+    candidatos = [m for m in modelos_activos if "llama" in m.lower()]
+    candidatos += [m for m in modelos_activos if m not in candidatos]
 
     system_prompt = (
         "Eres un Jefe de Mantenimiento Industrial con 20 años de experiencia en plantas "
@@ -99,15 +102,21 @@ def generar_orden(api_key):
             "4. **Equipo de Seguridad (EPP)** requerido"
         )
 
-    resp = client.chat.completions.create(
-        model=modelo_groq,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": instruccion},
-        ],
-        temperature=0.4,
-    )
-    return resp.choices[0].message.content, modelo_groq
+    ultimo_error = None
+    for modelo_groq in candidatos:
+        try:
+            resp = client.chat.completions.create(
+                model=modelo_groq,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": instruccion},
+                ],
+                temperature=0.4,
+            )
+            return resp.choices[0].message.content, modelo_groq
+        except Exception as e:  # modelo no válido para chat: probar el siguiente
+            ultimo_error = e
+    raise ultimo_error if ultimo_error else RuntimeError("Sin modelos de chat disponibles")
 
 
 if st.button("Generar Orden de Trabajo", type="primary"):
@@ -126,4 +135,5 @@ if st.button("Generar Orden de Trabajo", type="primary"):
         except Exception as e:
             st.error(f"No se pudo contactar a Groq ({type(e).__name__}). "
                      "Se mantiene el diagnóstico de ML.")
+            st.caption(f"Detalle técnico: {str(e)[:300]}")
             st.info(f"Diagnóstico ML: {ESTADOS[estado]} (probabilidad {prob_estado * 100:.1f}%).")
